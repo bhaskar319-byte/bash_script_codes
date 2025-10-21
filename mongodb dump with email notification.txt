@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# === Email Configuration ===
+TO=""
+SUBJECT="MongoDB Backup Status - Non Prod"
+FROM=""
+
+# === MongoDB Configuration ===
+MONGO_HOST=""
+MONGO_PORT=""
+MONGO_USER=""
+MONGO_PWD=''  # Use single quotes to avoid escaping $
+MONGO_DB=""         # Replace with your DB name
+
+# === Directory & Logging ===
+BACKUP_DIR=""
+DATE=$(date +"%Y-%m-%d_%H-%M-%S")
+OUTPUT_DIR=""
+LOG_FILE=""
+
+mkdir -p "$OUTPUT_DIR"
+rm -f "$LOG_FILE"
+
+# === Check if DB exists ===
+DB_EXISTS=$(mongosh --host "$MONGO_HOST" --port "$MONGO_PORT" -u "$MONGO_USER" -p "$MONGO_PWD" --authenticationDatabase "admin" --quiet --eval "db.getMongo().getDBNames().includes('$MONGO_DB')")
+
+if [ "$DB_EXISTS" != "true" ]; then
+    STATUS="Failed"
+    COLOR="#dc3545"
+    MESSAGE="❌ MongoDB backup failed: Database <strong>$MONGO_DB</strong> not found on the server."
+else
+    # === Perform the Dump ===
+    echo "Starting MongoDB schema-only backup..." | tee -a "$LOG_FILE"
+    mongodump \
+      --host "$MONGO_HOST" \
+      --port "$MONGO_PORT" \
+      --username "$MONGO_USER" \
+      --password "$MONGO_PWD" \
+      --authenticationDatabase "admin" \
+      --db "$MONGO_DB" \
+      --dumpDbUsersAndRoles \
+      --out "$OUTPUT_DIR" >>"$LOG_FILE" 2>&1
+
+    if [ $? -eq 0 ]; then
+        STATUS="Success"
+        COLOR="#28a745"
+        MESSAGE="✅ MongoDB schema backup for <strong>$MONGO_DB</strong> completed successfully."
+    else
+        STATUS="Failed"
+        COLOR="#dc3545"
+        MESSAGE="❌ MongoDB backup failed due to an error during mongodump execution."
+    fi
+fi
+
+# === HTML Email Body ===
+EMAIL_BODY=$(cat <<EOF
+From: $FROM
+To: $TO
+Subject: $SUBJECT
+Content-Type: text/html; charset=UTF-8
+
+<html>
+  <body style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px;">
+    <div style="background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+      <h2 style="color: $COLOR;">MongoDB Backup Status: $STATUS</h2>
+      <p style="font-size: 16px;">$MESSAGE</p>
+      <p><strong>Backup Time:</strong> $DATE</p>
+      <p><strong>Database:</strong> $MONGO_DB</p>
+    </div>
+  </body>
+</html>
+EOF
+)
+
+# === Send Email ===
+echo "$EMAIL_BODY" | msmtp --from="$FROM" -t
